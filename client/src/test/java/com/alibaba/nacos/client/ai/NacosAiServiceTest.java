@@ -18,6 +18,7 @@ package com.alibaba.nacos.client.ai;
 
 import com.alibaba.nacos.api.PropertyKeyConst;
 import com.alibaba.nacos.api.ai.AgentTransportMode;
+import com.alibaba.nacos.api.ai.SkillService;
 import com.alibaba.nacos.api.ai.constant.AiConstants;
 import com.alibaba.nacos.api.ai.listener.AbstractNacosAgentCardListener;
 import com.alibaba.nacos.api.ai.listener.AbstractNacosAgentDiscoveryListener;
@@ -29,6 +30,8 @@ import com.alibaba.nacos.api.ai.listener.NacosAgentDiscoveryEvent;
 import com.alibaba.nacos.api.ai.listener.NacosAgentSpecEvent;
 import com.alibaba.nacos.api.ai.listener.NacosMcpServerEvent;
 import com.alibaba.nacos.api.ai.listener.NacosPromptEvent;
+import com.alibaba.nacos.api.ai.listener.NacosSkillEvent;
+import com.alibaba.nacos.api.ai.listener.AbstractNacosSkillListener;
 import com.alibaba.nacos.api.ai.model.a2a.AgentCard;
 import com.alibaba.nacos.api.ai.model.a2a.AgentCardDetailInfo;
 import com.alibaba.nacos.api.ai.model.a2a.AgentEndpoint;
@@ -38,6 +41,9 @@ import com.alibaba.nacos.api.ai.model.agent.AgentCallInterface;
 import com.alibaba.nacos.api.ai.model.agent.AgentPublishRequest;
 import com.alibaba.nacos.api.ai.model.agent.AgentVersionDetail;
 import com.alibaba.nacos.api.ai.model.mcp.McpServerBasicInfo;
+import com.alibaba.nacos.api.ai.model.mcp.McpToolSpecification;
+import com.alibaba.nacos.api.ai.model.mcp.McpResourceSpecification;
+import com.alibaba.nacos.api.ai.model.mcp.McpEndpointSpec;
 import com.alibaba.nacos.api.ai.model.mcp.McpServerDetailInfo;
 import com.alibaba.nacos.api.ai.model.mcp.registry.ServerVersionDetail;
 import com.alibaba.nacos.api.ai.model.prompt.Prompt;
@@ -46,9 +52,12 @@ import com.alibaba.nacos.api.ai.model.rad.AgentDiscoveryFilter;
 import com.alibaba.nacos.api.ai.model.rad.AgentDiscoveryRequest;
 import com.alibaba.nacos.api.ai.model.rad.AgentDiscoveryResult;
 import com.alibaba.nacos.api.ai.model.rad.AgentEndpointDeregistrationBatch;
+import com.alibaba.nacos.api.ai.model.agent.AgentEndpointDeregistration;
 import com.alibaba.nacos.api.ai.model.rad.AgentEndpointRegistrationBatch;
+import com.alibaba.nacos.api.ai.model.agent.AgentEndpointRegistration;
 import com.alibaba.nacos.api.ai.model.rad.AgentReference;
 import com.alibaba.nacos.api.ai.model.rad.AgentSearchRequest;
+import com.alibaba.nacos.api.ai.model.agent.AgentSearchQuery;
 import com.alibaba.nacos.api.common.Constants;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.exception.api.NacosApiException;
@@ -64,6 +73,7 @@ import com.alibaba.nacos.client.ai.event.AgentSpecListenerInvoker;
 import com.alibaba.nacos.client.ai.event.AiChangeNotifier;
 import com.alibaba.nacos.client.ai.event.McpServerListenerInvoker;
 import com.alibaba.nacos.client.ai.event.PromptListenerInvoker;
+import com.alibaba.nacos.client.ai.event.SkillListenerInvoker;
 import com.alibaba.nacos.client.ai.remote.AiClientProxy;
 import com.alibaba.nacos.client.ai.remote.AiGrpcClient;
 import com.alibaba.nacos.client.ai.remote.AiHttpClientProxy;
@@ -75,6 +85,9 @@ import com.alibaba.nacos.client.env.NacosClientProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.MockedConstruction;
@@ -92,13 +105,18 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -988,7 +1006,7 @@ class NacosAiServiceTest {
         when(agentTransportRouter.publishAgent(any(AgentPublishRequest.class)))
             .thenReturn(expected);
         
-        assertEquals(expected, nacosAiService.publishAgent(source));
+        assertEquals(expected, nacosAiService.agent().publishAgent(source));
         ArgumentCaptor<AgentPublishRequest> request =
             ArgumentCaptor.forClass(AgentPublishRequest.class);
         verify(agentTransportRouter).publishAgent(request.capture());
@@ -1006,18 +1024,18 @@ class NacosAiServiceTest {
         AgentDiscoveryResult discoveryResult = new AgentDiscoveryResult();
         when(agentTransportRouter.discoverAgent(any(AgentDiscoveryRequest.class)))
             .thenReturn(discoveryResult);
-        AgentSearchRequest search = new AgentSearchRequest();
+        AgentSearchQuery search = new AgentSearchQuery();
         AgentReference reference = new AgentReference();
         reference.setAgentName("agent-a");
         
-        assertEquals(page, nacosAiService.searchAgents(search));
-        assertEquals(discoveryResult, nacosAiService.discoverAgent(reference));
+        assertEquals(page, nacosAiService.agent().searchAgents(search));
+        assertEquals(discoveryResult, nacosAiService.agent().discoverAgent(reference));
         
         ArgumentCaptor<AgentSearchRequest> searchCaptor =
             ArgumentCaptor.forClass(AgentSearchRequest.class);
         verify(agentTransportRouter).searchAgents(searchCaptor.capture());
         assertEquals(Constants.DEFAULT_NAMESPACE_ID, searchCaptor.getValue().getNamespaceId());
-        assertNull(search.getNamespaceId());
+        assertNotSame(search, searchCaptor.getValue());
         ArgumentCaptor<AgentDiscoveryRequest> discoveryCaptor =
             ArgumentCaptor.forClass(AgentDiscoveryRequest.class);
         verify(agentTransportRouter).discoverAgent(discoveryCaptor.capture());
@@ -1044,8 +1062,8 @@ class NacosAiServiceTest {
         when(agentDiscoveryCacheHolder.subscribe(reference, filter, listener))
             .thenReturn(expected);
         
-        assertEquals(expected, nacosAiService.subscribeAgent(reference, filter, listener));
-        nacosAiService.unsubscribeAgent(reference, filter, listener);
+        assertEquals(expected, nacosAiService.agent().subscribeAgent(reference, filter, listener));
+        nacosAiService.agent().unsubscribeAgent(reference, filter, listener);
         
         verify(agentDiscoveryCacheHolder).subscribe(reference, filter, listener);
         verify(agentDiscoveryCacheHolder).unsubscribe(reference, filter, listener);
@@ -1054,26 +1072,26 @@ class NacosAiServiceTest {
     @Test
     void completeAgentEndpointOperationsBindNamespaceBeforeDelegating() throws Exception {
         injectMocks();
-        AgentEndpointRegistrationBatch registration = new AgentEndpointRegistrationBatch();
+        AgentEndpointRegistration registration = new AgentEndpointRegistration();
         registration.setAgentName("agent-a");
         registration.setRuntimeVersion("1.0.0");
         registration.setProtocol("a2a");
         registration.setEndpoints(Collections.emptyList());
-        AgentEndpointDeregistrationBatch deregistration =
-            new AgentEndpointDeregistrationBatch();
+        AgentEndpointDeregistration deregistration =
+            new AgentEndpointDeregistration();
         deregistration.setAgentName("agent-a");
         deregistration.setProtocol("a2a");
         deregistration.setEndpoints(Collections.emptyList());
         
         assertThrows(NacosException.class,
-            () -> nacosAiService.registerAgentEndpoints(registration));
+            () -> nacosAiService.agent().registerAgentEndpoints(registration));
         assertThrows(NacosException.class,
-            () -> nacosAiService.deregisterAgentEndpoints(deregistration));
+            () -> nacosAiService.agent().deregisterAgentEndpoints(deregistration));
         
         registration.setEndpoints(Collections.singletonList(endpoint("http://host/a")));
         deregistration.setEndpoints(Collections.singletonList(endpoint("http://host/a")));
-        nacosAiService.registerAgentEndpoints(registration);
-        nacosAiService.deregisterAgentEndpoints(deregistration);
+        nacosAiService.agent().registerAgentEndpoints(registration);
+        nacosAiService.agent().deregisterAgentEndpoints(deregistration);
         
         ArgumentCaptor<AgentEndpointRegistrationBatch> registrationCaptor =
             ArgumentCaptor.forClass(AgentEndpointRegistrationBatch.class);
@@ -1085,8 +1103,9 @@ class NacosAiServiceTest {
         verify(agentEndpointPublicationManager).deregister(deregistrationCaptor.capture());
         assertEquals(Constants.DEFAULT_NAMESPACE_ID,
             deregistrationCaptor.getValue().getNamespaceId());
-        assertNull(registration.getNamespaceId());
-        assertNull(deregistration.getNamespaceId());
+        assertNotSame(registration.getEndpoints(), registrationCaptor.getValue().getEndpoints());
+        assertNotSame(deregistration.getEndpoints(),
+            deregistrationCaptor.getValue().getEndpoints());
     }
     
     @Test
@@ -1099,16 +1118,18 @@ class NacosAiServiceTest {
         int grpcClientIndex = grpcClientConstruction.constructed().size();
         try {
             aiService = new NacosAiService(properties);
-            // Verify aiClientProxy field is set to httpProxy
-            Field clientProxyField = NacosAiService.class.getDeclaredField("aiClientProxy");
-            clientProxyField.setAccessible(true);
-            Field httpProxyField = NacosAiService.class.getDeclaredField("httpProxy");
-            httpProxyField.setAccessible(true);
-            assertEquals(httpProxyField.get(aiService), clientProxyField.get(aiService));
-            verify(grpcClientConstruction.constructed().get(grpcClientIndex), never())
-                .start(any(), any());
-        } catch (NoSuchFieldException | IllegalAccessException ex) {
-            throw new RuntimeException(ex);
+            properties.setProperty(AiConstants.AI_PROMPT_TRANSPORT_MODE, "grpc");
+            aiService.prompt().getPrompt("http-prompt");
+            verify(httpProxyConstruction.constructed().get(grpcClientIndex))
+                .queryPrompt("http-prompt", null, null, null);
+            verify(grpcClientConstruction.constructed().get(grpcClientIndex), never()).start(any(),
+                any());
+            // Legacy A2A remains gRPC even when global/Agent are HTTP; getters remain inert.
+            aiService.agent().getAgentCard("a2a");
+            aiService.getAgentCard("a2a");
+            verify(grpcClientConstruction.constructed().get(grpcClientIndex)).start(any(), any());
+            verify(grpcClientConstruction.constructed().get(grpcClientIndex), Mockito.times(2))
+                .getAgentCard("a2a", "", "");
         } finally {
             if (aiService != null) {
                 aiService.shutdown();
@@ -1132,6 +1153,282 @@ class NacosAiServiceTest {
                 service.shutdown();
             }
         }
+    }
+    
+    @Test
+    void resourceOverridesInheritGlobalAndRejectEveryInvalidExplicitValue() throws Exception {
+        String[] keys = {AiConstants.AI_MCP_TRANSPORT_MODE, AiConstants.AI_AGENT_TRANSPORT_MODE,
+            AiConstants.AI_PROMPT_TRANSPORT_MODE, AiConstants.AI_SKILL_TRANSPORT_MODE,
+            AiConstants.AI_AGENT_SPEC_TRANSPORT_MODE};
+        for (String key : keys) {
+            NacosClientProperties properties =
+                NacosClientProperties.PROTOTYPE.derive(new Properties());
+            assertEquals(AgentTransportMode.HTTP,
+                NacosAiService.resolveResourceTransportMode(properties, key,
+                    AgentTransportMode.HTTP));
+            for (AgentTransportMode mode : AgentTransportMode.values()) {
+                properties.setProperty(key, mode.getValue().toUpperCase(java.util.Locale.ROOT));
+                assertEquals(mode, NacosAiService.resolveResourceTransportMode(properties, key,
+                    AgentTransportMode.HTTP));
+            }
+            for (String value : new String[] {"", " ", " grpc ", "unknown"}) {
+                Properties invalid = new Properties();
+                invalid.setProperty(PropertyKeyConst.SERVER_ADDR, "127.0.0.1");
+                invalid.setProperty(key, value);
+                int count = grpcClientConstruction.constructed().size();
+                NacosApiException failure =
+                    assertThrows(NacosApiException.class, () -> new NacosAiService(invalid));
+                assertEquals(NacosException.INVALID_PARAM, failure.getErrCode());
+                assertTrue(failure.getErrMsg().contains(key));
+                assertEquals(count, grpcClientConstruction.constructed().size());
+            }
+        }
+        Properties invalidGlobal = new Properties();
+        invalidGlobal.setProperty(AiConstants.AI_TRANSPORT_MODE, "invalid");
+        for (String key : keys) {
+            invalidGlobal.setProperty(key, "http");
+        }
+        assertThrows(NacosApiException.class, () -> new NacosAiService(invalidGlobal));
+    }
+    
+    @Test
+    void onlyHttpCapableResourcesDoNotStartGrpcForRequestedGrpc() throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty(PropertyKeyConst.SERVER_ADDR, "127.0.0.1");
+        properties.setProperty(AiConstants.AI_TRANSPORT_MODE, "http");
+        properties.setProperty(AiConstants.AI_SKILL_TRANSPORT_MODE, "grpc");
+        properties.setProperty(AiConstants.AI_AGENT_SPEC_TRANSPORT_MODE, "grpc");
+        int count = grpcClientConstruction.constructed().size();
+        NacosAiService service = new NacosAiService(properties);
+        try {
+            verify(grpcClientConstruction.constructed().get(count), never()).start(any(), any());
+        } finally {
+            service.shutdown();
+        }
+    }
+    
+    @Test
+    void resourceOverridesChooseIndependentBindingsAndRemainFrozen() throws Exception {
+        for (String global : new String[] {"grpc", "http"}) {
+            String override = "grpc".equals(global) ? "http" : "grpc";
+            Properties properties = new Properties();
+            properties.setProperty(PropertyKeyConst.SERVER_ADDR, "127.0.0.1");
+            properties.setProperty(AiConstants.AI_TRANSPORT_MODE, global);
+            properties.setProperty(AiConstants.AI_AGENT_TRANSPORT_MODE, override);
+            properties.setProperty(AiConstants.AI_PROMPT_TRANSPORT_MODE, override);
+            int index = grpcClientConstruction.constructed().size();
+            NacosAiService service = new NacosAiService(properties);
+            try {
+                AiGrpcClient grpc = grpcClientConstruction.constructed().get(index);
+                AiHttpClientProxy http = httpProxyConstruction.constructed().get(index);
+                properties.setProperty(AiConstants.AI_TRANSPORT_MODE, override);
+                properties.setProperty(AiConstants.AI_AGENT_TRANSPORT_MODE, global);
+                service.mcp().getMcpServer("mcp", "1.0.0");
+                service.agent().searchAgents(new AgentSearchQuery());
+                service.prompt().getPrompt("prompt");
+                if ("grpc".equals(global)) {
+                    verify(grpc).queryMcpServer("mcp", "1.0.0");
+                    verify(http).searchAgents(any());
+                    verify(http).queryPrompt("prompt", null, null, null);
+                    verify(http, never()).queryMcpServer(any(), any());
+                    verify(grpc, never()).searchAgents(any());
+                } else {
+                    verify(http).queryMcpServer("mcp", "1.0.0");
+                    verify(grpc).searchAgents(any());
+                    verify(grpc).queryPrompt("prompt", null, null, null);
+                    verify(grpc, never()).queryMcpServer(any(), any());
+                    verify(http, never()).searchAgents(any());
+                }
+                verify(grpc).start(any(), any());
+            } finally {
+                service.shutdown();
+            }
+        }
+    }
+    
+    @Test
+    void mcpReleaseWithResourcesDelegatesWithoutCreatingDraft() throws Exception {
+        injectMocks();
+        McpServerBasicInfo server = new McpServerBasicInfo();
+        server.setName("mcp");
+        ServerVersionDetail version = new ServerVersionDetail();
+        version.setVersion("1.0.0");
+        server.setVersionDetail(version);
+        McpToolSpecification tools = new McpToolSpecification();
+        McpResourceSpecification resources = new McpResourceSpecification();
+        McpEndpointSpec endpoint = new McpEndpointSpec();
+        when(mcpTransportRouter.releaseMcpServer(server, tools, resources, endpoint, false))
+            .thenReturn("mcp-id");
+        
+        assertEquals("mcp-id", nacosAiService.releaseMcpServer(server, tools, resources, endpoint));
+        verify(mcpTransportRouter).releaseMcpServer(server, tools, resources, endpoint, false);
+    }
+    
+    @ParameterizedTest
+    @ValueSource(ints = {404, 403})
+    void mcpSubscriptionTreatsOnlyNotFoundAsAbsent(int code) throws Exception {
+        injectMocks();
+        AbstractNacosMcpServerListener listener =
+            Mockito.mock(AbstractNacosMcpServerListener.class);
+        NacosException failure = new NacosException(code, "query failed");
+        when(mcpTransportRouter.queryMcpServer("mcp", "1.0.0")).thenThrow(failure);
+        
+        if (code == NacosException.NOT_FOUND) {
+            assertNull(nacosAiService.mcp().subscribeMcpServer("mcp", "1.0.0", listener));
+            verify(mcpServerCacheHolder).addMcpServerUpdateTask("mcp", "1.0.0");
+        } else {
+            assertSame(failure, assertThrows(NacosException.class,
+                () -> nacosAiService.mcp().subscribeMcpServer("mcp", "1.0.0", listener)));
+            verify(mcpServerCacheHolder, never()).addMcpServerUpdateTask("mcp", "1.0.0");
+        }
+        verify(aiChangeNotifier).registerListener(eq("mcp"), eq("1.0.0"),
+            any(McpServerListenerInvoker.class));
+        verifyNoInteractions(listener);
+    }
+    
+    @ParameterizedTest
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void skillSubscriptionPreservesInitialResultThroughBothEntryPoints(boolean resourceEntry,
+        boolean hasInitialResult) throws Exception {
+        injectMocks();
+        SkillService service = resourceEntry ? nacosAiService.skill() : nacosAiService;
+        AbstractNacosSkillListener listener = Mockito.mock(AbstractNacosSkillListener.class);
+        byte[] zip = hasInitialResult ? new byte[] {1, 2, 3} : null;
+        when(skillCacheHolder.subscribeSkill("skill", "1.0.0", "stable")).thenReturn(zip);
+        
+        assertSame(zip, service.subscribeSkill("skill", "1.0.0", "stable", listener));
+        verify(aiChangeNotifier).registerListener(eq("skill"), eq("1.0.0"), eq("stable"),
+            any(SkillListenerInvoker.class));
+        if (hasInitialResult) {
+            ArgumentCaptor<NacosSkillEvent> event = ArgumentCaptor.forClass(NacosSkillEvent.class);
+            verify(listener).onEvent(event.capture());
+            assertEquals("skill", event.getValue().getSkillName());
+            assertSame(zip, event.getValue().getZipBytes());
+        } else {
+            verifyNoInteractions(listener);
+        }
+    }
+    
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void skillSubscriptionValidationIsIdenticalThroughBothEntryPoints(boolean resourceEntry)
+        throws Exception {
+        injectMocks();
+        SkillService service = resourceEntry ? nacosAiService.skill() : nacosAiService;
+        AbstractNacosSkillListener listener = Mockito.mock(AbstractNacosSkillListener.class);
+        assertEquals(NacosException.INVALID_PARAM, assertThrows(NacosApiException.class,
+            () -> service.subscribeSkill(" ", null, null, listener)).getErrCode());
+        assertEquals(NacosException.INVALID_PARAM, assertThrows(NacosApiException.class,
+            () -> service.subscribeSkill("skill", null, null, null)).getErrCode());
+        assertEquals(NacosException.INVALID_PARAM, assertThrows(NacosApiException.class,
+            () -> service.unsubscribeSkill(" ", null, null, listener)).getErrCode());
+        service.unsubscribeSkill("skill", null, null, null);
+        verifyNoInteractions(aiChangeNotifier, skillCacheHolder, listener);
+    }
+    
+    @ParameterizedTest
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void skillUnsubscriptionRetainsCacheUntilLastListenerThroughBothEntryPoints(
+        boolean resourceEntry,
+        boolean remainingListeners) throws Exception {
+        injectMocks();
+        SkillService service = resourceEntry ? nacosAiService.skill() : nacosAiService;
+        AbstractNacosSkillListener listener = Mockito.mock(AbstractNacosSkillListener.class);
+        when(aiChangeNotifier.isSkillSubscribed("skill", "1.0.0", "stable"))
+            .thenReturn(remainingListeners);
+        
+        service.unsubscribeSkill("skill", "1.0.0", "stable", listener);
+        verify(aiChangeNotifier).deregisterListener(eq("skill"), eq("1.0.0"), eq("stable"),
+            any(SkillListenerInvoker.class));
+        if (remainingListeners) {
+            verify(skillCacheHolder, never()).unsubscribeSkill("skill", "1.0.0", "stable");
+        } else {
+            verify(skillCacheHolder).unsubscribeSkill("skill", "1.0.0", "stable");
+        }
+    }
+    
+    @Test
+    void subscriptionsDoNotRepeatAnEventDeliveredBeforeInitialReadReturns() throws Exception {
+        injectMocks();
+        McpServerDetailInfo mcp = new McpServerDetailInfo();
+        AgentCardDetailInfo card = new AgentCardDetailInfo();
+        AgentSpec spec = new AgentSpec();
+        Prompt prompt = new Prompt("prompt", "1.0.0", "template");
+        byte[] zip = {1, 2, 3};
+        NacosMcpServerEvent mcpEvent = new NacosMcpServerEvent(mcp);
+        NacosAgentCardEvent cardEvent = new NacosAgentCardEvent(card);
+        NacosAgentSpecEvent specEvent = new NacosAgentSpecEvent("spec", spec);
+        NacosPromptEvent promptEvent = new NacosPromptEvent("prompt", prompt);
+        NacosSkillEvent skillEvent = new NacosSkillEvent("skill", zip, null, null);
+        doAnswer(call -> {
+            call.getArgument(2, McpServerListenerInvoker.class).invoke(mcpEvent);
+            return null;
+        }).when(aiChangeNotifier).registerListener(eq("mcp"), eq("1.0.0"),
+            any(McpServerListenerInvoker.class));
+        doAnswer(call -> {
+            call.getArgument(2, AgentCardListenerInvoker.class).invoke(cardEvent);
+            return null;
+        }).when(aiChangeNotifier).registerListener(eq("agent"), eq("1.0.0"),
+            any(AgentCardListenerInvoker.class));
+        doAnswer(call -> {
+            call.getArgument(1, AgentSpecListenerInvoker.class).invoke(specEvent);
+            return null;
+        }).when(aiChangeNotifier).registerListener(eq("spec"), any(AgentSpecListenerInvoker.class));
+        doAnswer(call -> {
+            call.getArgument(3, PromptListenerInvoker.class).invoke(promptEvent);
+            return null;
+        }).when(aiChangeNotifier).registerListener(eq("prompt"), eq("1.0.0"), isNull(),
+            any(PromptListenerInvoker.class));
+        doAnswer(call -> {
+            call.getArgument(3, SkillListenerInvoker.class).invoke(skillEvent);
+            return null;
+        }).when(aiChangeNotifier).registerListener(eq("skill"), eq("1.0.0"), isNull(),
+            any(SkillListenerInvoker.class));
+        when(mcpServerCacheHolder.getMcpServer("mcp", "1.0.0")).thenReturn(mcp);
+        when(grpcClient.subscribeAgentCard("agent", "1.0.0")).thenReturn(card);
+        when(agentSpecCacheHolder.subscribeAgentSpec("spec")).thenReturn(spec);
+        when(promptCacheHolder.subscribePrompt("prompt", "1.0.0", null)).thenReturn(prompt);
+        when(skillCacheHolder.subscribeSkill("skill", "1.0.0", null)).thenReturn(zip);
+        
+        AbstractNacosMcpServerListener mcpListener =
+            Mockito.mock(AbstractNacosMcpServerListener.class);
+        AbstractNacosAgentCardListener cardListener =
+            Mockito.mock(AbstractNacosAgentCardListener.class);
+        AbstractNacosAgentSpecListener specListener =
+            Mockito.mock(AbstractNacosAgentSpecListener.class);
+        AbstractNacosPromptListener promptListener =
+            Mockito.mock(AbstractNacosPromptListener.class);
+        AbstractNacosSkillListener skillListener = Mockito.mock(AbstractNacosSkillListener.class);
+        assertSame(mcp, nacosAiService.mcp().subscribeMcpServer("mcp", "1.0.0", mcpListener));
+        assertSame(card, nacosAiService.agent().subscribeAgentCard("agent", "1.0.0", cardListener));
+        assertSame(spec, nacosAiService.agentSpec().subscribeAgentSpec("spec", specListener));
+        assertSame(prompt,
+            nacosAiService.prompt().subscribePrompt("prompt", "1.0.0", null, promptListener));
+        assertSame(zip,
+            nacosAiService.skill().subscribeSkill("skill", "1.0.0", null, skillListener));
+        
+        verify(mcpListener).onEvent(any(NacosMcpServerEvent.class));
+        verify(cardListener).onEvent(any(NacosAgentCardEvent.class));
+        verify(specListener).onEvent(any(NacosAgentSpecEvent.class));
+        verify(promptListener).onEvent(any(NacosPromptEvent.class));
+        verify(skillListener).onEvent(any(NacosSkillEvent.class));
+        verifyNoInteractions(mcpTransportRouter);
+    }
+    
+    @Test
+    void absentAgentAndAgentSpecKeepSubscriptionWithoutInitialEvent() throws Exception {
+        injectMocks();
+        AbstractNacosAgentCardListener cardListener =
+            Mockito.mock(AbstractNacosAgentCardListener.class);
+        AbstractNacosAgentSpecListener specListener =
+            Mockito.mock(AbstractNacosAgentSpecListener.class);
+        
+        assertNull(nacosAiService.agent().subscribeAgentCard("agent", "1.0.0", cardListener));
+        assertNull(nacosAiService.agentSpec().subscribeAgentSpec("spec", specListener));
+        verify(aiChangeNotifier).registerListener(eq("agent"), eq("1.0.0"),
+            any(AgentCardListenerInvoker.class));
+        verify(aiChangeNotifier).registerListener(eq("spec"), any(AgentSpecListenerInvoker.class));
+        verifyNoInteractions(cardListener, specListener);
     }
     
     private void injectMocks() throws NoSuchFieldException, IllegalAccessException {
@@ -1276,5 +1573,23 @@ class NacosAiServiceTest {
         result.setUri(uri);
         result.setTransport("jsonrpc");
         return result;
+    }
+    
+    @Test
+    void resourceDelegatesShareExistingStateAndLifecycle() throws Exception {
+        injectMocks();
+        org.junit.jupiter.api.Assertions.assertSame(nacosAiService.mcp(), nacosAiService.mcp());
+        org.junit.jupiter.api.Assertions.assertSame(nacosAiService.agent(), nacosAiService.agent());
+        org.junit.jupiter.api.Assertions.assertSame(nacosAiService.skill(), nacosAiService.skill());
+        org.junit.jupiter.api.Assertions.assertSame(nacosAiService.agentSpec(),
+            nacosAiService.agentSpec());
+        org.junit.jupiter.api.Assertions.assertSame(nacosAiService.prompt(),
+            nacosAiService.prompt());
+        nacosAiService.mcp().getMcpServer("mcp", "1.0.0");
+        nacosAiService.getMcpServer("mcp", "1.0.0");
+        verify(mcpTransportRouter, org.mockito.Mockito.times(2)).queryMcpServer("mcp", "1.0.0");
+        nacosAiService.agent().getAgentCard("agent");
+        nacosAiService.getAgentCard("agent");
+        verify(grpcClient, org.mockito.Mockito.times(2)).getAgentCard("agent", "", "");
     }
 }

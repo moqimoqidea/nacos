@@ -20,8 +20,8 @@ import com.alibaba.nacos.api.ai.AgentTransportMode;
 import com.alibaba.nacos.api.ai.AiService;
 import com.alibaba.nacos.api.ai.constant.AiConstants;
 import com.alibaba.nacos.api.ai.model.agent.Endpoint;
-import com.alibaba.nacos.api.ai.model.rad.AgentEndpointRegistrationBatch;
-import com.alibaba.nacos.api.ai.model.rad.AgentSearchRequest;
+import com.alibaba.nacos.api.ai.model.agent.AgentEndpointRegistration;
+import com.alibaba.nacos.api.ai.model.agent.AgentSearchQuery;
 import com.alibaba.nacos.api.config.ConfigService;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.naming.NamingService;
@@ -202,26 +202,26 @@ public class AuthEnabledJavaSdkITCase extends JavaSdkBaseITCase {
         assumeAuthEnabled();
 
         AiService readWrite = createAiService(aiProperties(AuthIdentity.CLIENT_READ_WRITE, mode));
-        assertNotNull(readWrite.searchAgents(searchRequest()));
+        assertNotNull(readWrite.agent().searchAgents(searchRequest()));
 
         AiService readOnly = createAiService(aiProperties(AuthIdentity.CLIENT_READ_ONLY, mode));
-        assertNotNull(readOnly.searchAgents(searchRequest()));
-        assertNoRight(() -> readOnly.registerAgentEndpoints(endpointBatch(mode, "readonly")));
+        assertNotNull(readOnly.agent().searchAgents(searchRequest()));
+        assertNoRight(() -> readOnly.agent().registerAgentEndpoints(endpointBatch(mode, "readonly")));
 
         AiService noPermission = createAiServiceWithoutReadiness(
                 aiProperties(AuthIdentity.CLIENT_NO_PERMISSION, mode));
-        assertNoRight(() -> noPermission.searchAgents(searchRequest()));
-        assertNoRight(() -> noPermission.registerAgentEndpoints(
+        assertNoRight(() -> noPermission.agent().searchAgents(searchRequest()));
+        assertNoRight(() -> noPermission.agent().registerAgentEndpoints(
                 endpointBatch(mode, "no-permission")));
 
         AiService invalid = createAiServiceWithoutReadiness(invalidAiProperties(mode));
-        assertNoRight(() -> invalid.searchAgents(searchRequest()));
-        assertNoRight(() -> invalid.registerAgentEndpoints(endpointBatch(mode, "invalid")));
+        assertNoRight(() -> invalid.agent().searchAgents(searchRequest()));
+        assertNoRight(() -> invalid.agent().registerAgentEndpoints(endpointBatch(mode, "invalid")));
 
         AiService anonymous = createAiServiceWithoutReadiness(
                 aiProperties(AuthIdentity.ANONYMOUS, mode));
-        assertNoRight(() -> anonymous.searchAgents(searchRequest()));
-        assertNoRight(() -> anonymous.registerAgentEndpoints(endpointBatch(mode, "anonymous")));
+        assertNoRight(() -> anonymous.agent().searchAgents(searchRequest()));
+        assertNoRight(() -> anonymous.agent().registerAgentEndpoints(endpointBatch(mode, "anonymous")));
     }
 
     private Properties aiProperties(AuthIdentity identity, AgentTransportMode mode) {
@@ -236,22 +236,22 @@ public class AuthEnabledJavaSdkITCase extends JavaSdkBaseITCase {
         return result;
     }
 
-    private AgentSearchRequest searchRequest() {
-        AgentSearchRequest result = new AgentSearchRequest();
+    private AgentSearchQuery searchRequest() {
+        AgentSearchQuery result = new AgentSearchQuery();
         result.setAgentNameContains(randomServiceName("auth-search"));
         result.setPageNo(1);
         result.setPageSize(1);
         return result;
     }
 
-    private AgentEndpointRegistrationBatch endpointBatch(AgentTransportMode mode,
+    private AgentEndpointRegistration endpointBatch(AgentTransportMode mode,
             String identity) {
         Endpoint endpoint = new Endpoint();
         endpoint.setUri("http://127.0.0.1:" + randomPort() + "/auth");
         endpoint.setTransport("HTTP");
         endpoint.setPriority(0);
         endpoint.setWeight(1D);
-        AgentEndpointRegistrationBatch result = new AgentEndpointRegistrationBatch();
+        AgentEndpointRegistration result = new AgentEndpointRegistration();
         result.setAgentName(randomServiceName("auth-" + mode.getValue() + '-' + identity));
         result.setRuntimeVersion(AI_RUNTIME_VERSION);
         result.setProtocol(AI_PROTOCOL);
